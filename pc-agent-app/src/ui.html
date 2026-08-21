@@ -1,0 +1,151 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SOWAI Agent</title>
+<style>
+  :root{
+    --ground:#ECEEF1; --surface:#fff; --ink:#161B22; --ink2:#6B7684;
+    --rule:#D3D8DE; --teal:#2C6360; --teal-ink:#fff; --amber:#B06B12;
+    --ok:#3B6B47; --ok-bg:#DCE8DF; --no:#9A3F2B; --no-bg:#F0DCD6;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --ground:#12161B; --surface:#191E25; --ink:#E7EAEE; --ink2:#828C99;
+           --rule:#2C333C; --teal:#7FB8B3; --teal-ink:#12161B;
+           --ok:#89C39A; --ok-bg:#1C2A21; --no:#DE9A85; --no-bg:#2E1E1A; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+       background:var(--ground);color:var(--ink);font-size:14px;line-height:1.5;
+       padding:20px}
+  h1{font-size:19px;margin:0 0 2px}
+  .sub{color:var(--ink2);font-size:12.5px;margin:0 0 18px}
+  .card{background:var(--surface);border:1px solid var(--rule);border-radius:10px;
+        padding:14px 16px;margin-bottom:12px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;
+           color:var(--ink2);margin:0 0 10px;font-weight:600}
+  label{display:block;font-size:12px;color:var(--ink2);margin:8px 0 3px}
+  input{width:100%;padding:9px 10px;border:1px solid var(--rule);border-radius:7px;
+        background:var(--ground);color:var(--ink);font-size:14px;font-family:inherit}
+  input.codice{text-align:center;font-size:20px;letter-spacing:.15em}
+  button{border:0;border-radius:7px;padding:9px 14px;font-size:14px;font-weight:600;
+          cursor:pointer;font-family:inherit;background:var(--teal);color:var(--teal-ink)}
+  button.ghost{background:transparent;color:var(--amber);border:1px solid var(--rule)}
+  button:disabled{opacity:.5;cursor:default}
+  .riga{display:flex;gap:8px;align-items:center;margin-top:10px}
+  .riga button{flex:1}
+  .pill{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 8px;
+        border-radius:20px}
+  .pill.ok{color:var(--ok);background:var(--ok-bg)}
+  .pill.no{color:var(--no);background:var(--no-bg)}
+  .stato-riga{display:flex;justify-content:space-between;align-items:center;
+              padding:4px 0}
+  .log{font-family:ui-monospace,monospace;font-size:11px;color:var(--ink2);
+       max-height:90px;overflow:auto;margin-top:8px;white-space:pre-wrap}
+  .nascosto{display:none}
+  .esito{font-size:12.5px;margin-top:8px}
+  .esito.ok{color:var(--ok)} .esito.no{color:var(--no)}
+</style>
+
+<h1>SOWAI Agent</h1>
+<p class="sub">Questo computer diventa un dispositivo del tuo gestionale.</p>
+
+<!-- 1. Claude -->
+<div class="card">
+  <h2>1 · Claude</h2>
+  <div class="stato-riga">
+    <span>Claude Code installato</span>
+    <span id="claude-inst" class="pill no">verifico…</span>
+  </div>
+  <div class="stato-riga">
+    <span>Accesso effettuato</span>
+    <span id="claude-log" class="pill no">—</span>
+  </div>
+  <div class="riga">
+    <button id="btn-installa" class="ghost">Installa Claude</button>
+    <button id="btn-login" class="ghost">Accedi</button>
+    <button id="btn-riverifica" class="ghost">Ricontrolla</button>
+  </div>
+  <div id="log" class="log nascosto"></div>
+</div>
+
+<!-- 2. Accoppiamento -->
+<div class="card" id="card-pair">
+  <h2>2 · Collega al gestionale</h2>
+  <label>Indirizzo del tuo SOWAI</label>
+  <input id="base" placeholder="https://tuonome.workingwithweb.eu" autocomplete="off">
+  <label>Codice di accoppiamento (6 cifre, dura 15 minuti)</label>
+  <input id="codice" class="codice" placeholder="000000" inputmode="numeric" maxlength="6">
+  <div class="riga"><button id="btn-accoppia">Accoppia</button></div>
+  <div id="esito-pair" class="esito"></div>
+</div>
+
+<!-- 3. Stato (mostrato quando accoppiato) -->
+<div class="card nascosto" id="card-stato">
+  <h2>3 · Stato</h2>
+  <div class="stato-riga"><span id="stato-testo">—</span></div>
+  <div class="riga">
+    <button id="btn-avvia" class="ghost">Avvia</button>
+    <button id="btn-ferma" class="ghost">Ferma</button>
+    <button id="btn-scollega" class="ghost" style="color:var(--no)">Scollega</button>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function pill(el, ok, testo){ el.className = 'pill ' + (ok?'ok':'no'); el.textContent = testo; }
+
+async function aggiornaClaude(){
+  const s = await window.sowai.claudeStato();
+  pill($('claude-inst'), s.installato, s.installato ? 'sì' : 'no');
+  pill($('claude-log'), s.loggato, s.loggato ? 'sì' : 'no');
+  $('btn-installa').disabled = s.installato;
+  $('btn-login').disabled = !s.installato || s.loggato;
+}
+
+async function aggiornaStato(){
+  const s = await window.sowai.statoAttuale();
+  if (s.accoppiato){
+    $('card-pair').classList.add('nascosto');
+    $('card-stato').classList.remove('nascosto');
+    const conn = s.tipo === 'avviato';
+    $('stato-testo').innerHTML = conn
+      ? 'Connesso · in ascolto <span class="pill ok">attivo</span>'
+      : 'Collegato · agente fermo <span class="pill no">fermo</span>';
+  } else {
+    $('card-pair').classList.remove('nascosto');
+    $('card-stato').classList.add('nascosto');
+  }
+}
+
+$('btn-installa').onclick = async () => {
+  $('log').classList.remove('nascosto'); $('log').textContent = 'installo…\n';
+  $('btn-installa').disabled = true;
+  const r = await window.sowai.claudeInstalla();
+  $('log').textContent += r.ok ? '\nfatto.' : '\nerrore: '+(r.errore||r.codice);
+  aggiornaClaude();
+};
+$('btn-login').onclick = async () => {
+  await window.sowai.claudeLogin();
+  $('claude-log').textContent = 'accedi nella finestra aperta, poi Ricontrolla';
+};
+$('btn-riverifica').onclick = aggiornaClaude;
+
+$('btn-accoppia').onclick = async () => {
+  const base = $('base').value.trim(), codice = $('codice').value.trim();
+  const e = $('esito-pair');
+  if (!base || !codice){ e.className='esito no'; e.textContent='Servono indirizzo e codice.'; return; }
+  e.className='esito'; e.textContent='accoppiamento in corso…';
+  const r = await window.sowai.accoppia(base, codice);
+  if (r.ok){ e.className='esito ok'; e.textContent='Accoppiato.'; aggiornaStato(); }
+  else { e.className='esito no'; e.textContent='Non riuscito: '+(r.error||'controlla indirizzo e codice'); }
+};
+$('btn-avvia').onclick = () => window.sowai.avvia();
+$('btn-ferma').onclick = () => window.sowai.ferma();
+$('btn-scollega').onclick = async () => { await window.sowai.scollega(); aggiornaStato(); };
+
+window.sowai.suStato(() => aggiornaStato());
+window.sowai.suClaudeLog((r) => { const l=$('log'); l.classList.remove('nascosto'); l.textContent += r+'\n'; l.scrollTop=l.scrollHeight; });
+
+aggiornaClaude();
+aggiornaStato();
+</script>
