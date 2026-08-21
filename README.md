@@ -141,3 +141,16 @@ In OpenClaw, sull'agente:
 Attenzione: `minimal` da solo contiene **un** solo strumento e non include
 `bundle-mcp`, quindi spegne anche i server MCP. Va sempre accompagnato da
 `alsoAllow` che rinomina per esteso quello che si vuole tenere.
+
+---
+
+## In questo repo c'è anche: SOWAI Browser Agent
+
+`browser-extension/` — l'estensione Chrome che fa del browser un device del
+tenant. Stessa architettura del server MCP qui sopra, altra periferica: si
+accoppia a sowai/fitness con link + codice a 6 cifre (o auto-accoppiamento via
+sessione Odoo), dichiara le sue capacita', e l'AI collegata al tenant la
+guida. Vedi `browser-extension/README.md`.
+
+Le tre gambe dello stesso tavolo - browser, telefono, PC - parlano tutte le
+stesse quattro rotte verso il tenant: pair, heartbeat, poll, result.
