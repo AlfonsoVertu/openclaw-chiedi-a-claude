@@ -10,6 +10,7 @@ const { execFile } = require('child_process');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const fivem = require('./fivem');
 
 // ------------------------------------------------------------- impostazioni
 
@@ -69,6 +70,17 @@ async function capacita(puoEseguire) {
     claude: await claudeLoggato(),
   };
   if (puoEseguire) c.esegui = true;
+  // FiveM: capacita' sempre annunciata (ricerca/installazione non richiedono
+  // 'esegui'), ma le azioni di gestione processo/console sono comunque
+  // filtrate da puoEseguire dentro _eseguiAzione.
+  try {
+    const ric = await fivem.ricognizione();
+    c.fivem = true;
+    c.fivem_trovato = ric.installazioni.length > 0 || ric.processi.length > 0;
+  } catch {
+    c.fivem = true;
+    c.fivem_trovato = false;
+  }
   return c;
 }
 
@@ -168,7 +180,79 @@ class Agent {
       if (!comando) throw new Error("serve 'comando'");
       return await this._shell(comando);
     }
+    if (azione === 'esegui_admin') {
+      // stessa guardia di 'esegui': l'elevazione non aggira il consenso
+      // dell'utente sull'agent, aggiunge solo il consenso UAC sopra.
+      if (!this.puoEseguire) throw new Error("l'esecuzione di comandi e' disattivata");
+      const comando = p.comando;
+      if (!comando) throw new Error("serve 'comando'");
+      return await this._shellAdmin(comando);
+    }
+    if (azione === 'agenti_rete' || azione === 'lista_peer') {
+      return await this.agentiInRete();
+    }
+    if (azione === 'fivem') {
+      return await this._eseguiFivem(p);
+    }
     throw new Error('azione sconosciuta: ' + azione);
+  }
+
+  // Sotto-comandi FiveM: p.sotto seleziona l'operazione, gli altri campi di
+  // p sono i parametri specifici. La ricerca e' sempre permessa (sola
+  // lettura); installazione/avvio/stop/console/scrittura richiedono
+  // puoEseguire, come per l'azione 'esegui'.
+  async _eseguiFivem(p) {
+    const sotto = p.sotto;
+    if (!sotto) throw new Error("serve 'sotto' (es. cerca, stato, avvia, ferma, console, ...)");
+    const soloLettura = new Set(['cerca', 'stato', 'log', 'leggi_cfg', 'risorse']);
+    if (!soloLettura.has(sotto) && !this.puoEseguire) {
+      throw new Error("l'esecuzione di comandi e' disattivata, non posso fare '" + sotto + "' su FiveM");
+    }
+    switch (sotto) {
+      case 'cerca':
+        return await fivem.ricognizione();
+      case 'installa':
+        if (!p.cartella) throw new Error("serve 'cartella'");
+        return await fivem.installa(p.cartella, {
+          versione: p.versione, nomeServer: p.nome_server,
+          forzareSovrascrittura: !!p.forza,
+        });
+      case 'avvia':
+        if (!p.exe || !p.server_data) throw new Error("servono 'exe' e 'server_data'");
+        return fivem.avvia(p.exe, p.server_data, { cfgNome: p.cfg_nome });
+      case 'ferma':
+        if (!p.server_data) throw new Error("serve 'server_data'");
+        return await fivem.ferma(p.server_data);
+      case 'riavvia':
+        if (!p.server_data) throw new Error("serve 'server_data'");
+        return await fivem.riavvia(p.server_data, { cfgNome: p.cfg_nome });
+      case 'stato':
+        if (!p.server_data) throw new Error("serve 'server_data'");
+        return fivem.stato(p.server_data);
+      case 'console':
+        if (!p.server_data || !p.comando) throw new Error("servono 'server_data' e 'comando'");
+        return fivem.mandaComando(p.server_data, p.comando);
+      case 'log':
+        if (!p.server_data) throw new Error("serve 'server_data'");
+        return fivem.leggiLog(p.server_data, p.righe);
+      case 'leggi_cfg':
+        if (!p.server_data) throw new Error("serve 'server_data'");
+        return { contenuto: fivem.leggiServerCfg(p.server_data) };
+      case 'scrivi_cfg':
+        if (!p.server_data || p.contenuto == null) throw new Error("servono 'server_data' e 'contenuto'");
+        return fivem.scriviServerCfg(p.server_data, p.contenuto);
+      case 'risorse':
+        if (!p.server_data) throw new Error("serve 'server_data'");
+        return { risorse: fivem.elencaRisorse(p.server_data) };
+      case 'whitelist_aggiungi':
+        if (!p.server_data || !p.identificativo) throw new Error("servono 'server_data' e 'identificativo'");
+        return fivem.whitelistAggiungi(p.server_data, p.identificativo, p.gruppo);
+      case 'banna':
+        if (!p.server_data || !p.identificativo) throw new Error("servono 'server_data' e 'identificativo'");
+        return fivem.bannaGiocatore(p.server_data, p.identificativo, p.motivo);
+      default:
+        throw new Error('sotto-azione fivem sconosciuta: ' + sotto);
+    }
   }
 
   _shell(comando) {
@@ -183,12 +267,70 @@ class Agent {
     });
   }
 
+  // Come _shell, ma con elevazione: su Windows rilancia il comando in un
+  // processo con privilegi amministrativi via PowerShell
+  // 'Start-Process -Verb RunAs -Wait', che fa comparire il prompt UAC
+  // nativo. Non c'e' modo di leggere stdout/stderr del processo elevato
+  // attraverso RunAs (e' un altro token, un'altra sessione): si scrive tutto
+  // su file temporanei e li si legge dopo - stesso trucco di chiunque debba
+  // elevare senza dipendenze npm in piu'.
+  _shellAdmin(comando) {
+    if (process.platform !== 'win32') {
+      // fuori da Windows non c'e' UAC: si esegue e basta, l'elevazione la
+      // gestisce l'utente con sudo se serve.
+      return this._shell(comando);
+    }
+    const os2 = require('os');
+    const { execFile } = require('child_process');
+    const bollo = Date.now() + '-' + Math.floor(Math.random() * 1e6);
+    const outFile = path.join(os2.tmpdir(), `sowai-admin-out-${bollo}.txt`);
+    const errFile = path.join(os2.tmpdir(), `sowai-admin-err-${bollo}.txt`);
+    const codeFile = path.join(os2.tmpdir(), `sowai-admin-code-${bollo}.txt`);
+    const cmdFile = path.join(os2.tmpdir(), `sowai-admin-cmd-${bollo}.cmd`);
+    const runnerFile = path.join(os2.tmpdir(), `sowai-admin-runner-${bollo}.ps1`);
+    // il comando dell'utente finisce in un .cmd separato: evita ogni problema
+    // di escaping fra PowerShell e cmd.exe, ognuno legge solo il proprio file.
+    fs.writeFileSync(cmdFile, '@echo off\r\n' + comando + '\r\n');
+    const runner = [
+      `$p = Start-Process -FilePath cmd.exe -ArgumentList '/c "${cmdFile}" > "${outFile}" 2> "${errFile}"' -Verb RunAs -WindowStyle Hidden -Wait -PassThru`,
+      `$p.ExitCode | Out-File -FilePath "${codeFile}" -Encoding ascii`,
+    ].join('\r\n');
+    fs.writeFileSync(runnerFile, runner);
+    return new Promise((resolve) => {
+      execFile('powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerFile],
+        { timeout: 300000, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
+        (err) => {
+          let stdout = '', stderr = '', codice = 1;
+          try { stdout = fs.readFileSync(outFile, 'utf8').slice(0, 8000); } catch {}
+          try { stderr = fs.readFileSync(errFile, 'utf8').slice(0, 2000); } catch {}
+          try { codice = parseInt(fs.readFileSync(codeFile, 'utf8').trim(), 10); } catch {}
+          if (Number.isNaN(codice)) codice = err ? 1 : 0;
+          for (const f of [outFile, errFile, codeFile, cmdFile, runnerFile]) {
+            try { fs.unlinkSync(f); } catch {}
+          }
+          resolve({ stdout, stderr, codice, elevato: true });
+        });
+    });
+  }
+
   _rispondi(corr, stato, risultato, errore, durataMs) {
     const c = { device_id: this.stato.device_id, token: this.stato.token,
                 corr_id: corr, status: stato, duration_ms: durataMs };
     if (risultato != null) c.result = risultato;
     if (errore != null) c.error = errore;
     return post(this.stato.base, '/result', c);
+  }
+
+  // Gli altri device dello stesso tenant (stessa company del device
+  // corrente): usata sia come azione remota che dalla UI locale via IPC.
+  // Se non accoppiato ritorna un fallimento pulito, senza eccezioni.
+  async agentiInRete() {
+    if (!this.accoppiato) return { ok: false, error: 'non accoppiato' };
+    const r = await post(this.stato.base, '/list_peers',
+      { device_id: this.stato.device_id, token: this.stato.token });
+    if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'richiesta non riuscita' };
+    return { ok: true, devices: r.devices || [] };
   }
 
   async avvia() {

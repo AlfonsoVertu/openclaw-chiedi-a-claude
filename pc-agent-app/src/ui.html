@@ -48,6 +48,8 @@
 <h1>SOWAI Agent</h1>
 <p class="sub">Questo computer diventa un dispositivo del tuo gestionale.</p>
 
+<div id="avviso-claude" class="esito no nascosto" style="margin:-6px 0 12px"></div>
+
 <!-- 1. Claude -->
 <div class="card">
   <h2>1 · Claude</h2>
@@ -58,6 +60,10 @@
   <div class="stato-riga">
     <span>Accesso effettuato</span>
     <span id="claude-log" class="pill no">—</span>
+  </div>
+  <div class="stato-riga">
+    <span>Server FiveM</span>
+    <span id="fivem-stato" class="pill no">—</span>
   </div>
   <div class="riga">
     <button id="btn-installa" class="ghost">Installa Claude</button>
@@ -89,6 +95,13 @@
   </div>
 </div>
 
+<!-- 4. Altri agenti nella rete -->
+<div class="card nascosto" id="card-rete">
+  <h2>4 · Agenti nella rete</h2>
+  <div id="rete-lista"></div>
+  <div class="riga"><button id="btn-rete" class="ghost">Aggiorna</button></div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 
@@ -107,15 +120,55 @@ async function aggiornaStato(){
   if (s.accoppiato){
     $('card-pair').classList.add('nascosto');
     $('card-stato').classList.remove('nascosto');
+    $('card-rete').classList.remove('nascosto');
     const conn = s.tipo === 'avviato';
     $('stato-testo').innerHTML = conn
       ? 'Connesso · in ascolto <span class="pill ok">attivo</span>'
       : 'Collegato · agente fermo <span class="pill no">fermo</span>';
+    aggiornaRete();
   } else {
     $('card-pair').classList.remove('nascosto');
     $('card-stato').classList.add('nascosto');
+    $('card-rete').classList.add('nascosto');
+  }
+  mostraAvvisoClaude(s.claudeLancio);
+}
+
+// Mostra l'esito della verifica Claude fatta al lancio (non solo quando
+// l'utente preme "Ricontrolla"): se non e' loggato, lo si dice subito,
+// non lo si scopre a meta' di un task fallito.
+function mostraAvvisoClaude(cs){
+  const el = $('avviso-claude');
+  if (cs && cs.installato && !cs.loggato){
+    el.classList.remove('nascosto');
+    el.textContent = 'Sessione Claude scaduta o assente: premi "Accedi" qui sotto per rifare il login.';
+  } else if (cs && !cs.installato && cs.verificato){
+    el.classList.remove('nascosto');
+    el.textContent = 'Claude Code non risulta installato su questo PC.';
+  } else {
+    el.classList.add('nascosto');
   }
 }
+
+async function aggiornaRete(){
+  const lista = $('rete-lista');
+  lista.textContent = 'carico…';
+  const r = await window.sowai.agentiRete();
+  if (!r.ok){ lista.textContent = 'Non disponibile: ' + (r.error || ''); return; }
+  if (!r.devices || r.devices.length === 0){ lista.textContent = 'Nessun altro agente trovato.'; return; }
+  lista.innerHTML = '';
+  for (const d of r.devices){
+    const riga = document.createElement('div');
+    riga.className = 'stato-riga';
+    const ultimo = d.last_seen ? new Date(d.last_seen).toLocaleString() : '—';
+    riga.innerHTML = '<span>' + (d.name || '') + (d.is_self ? ' (questo PC)' : '') +
+      ' · ' + (d.device_type || '') + '</span>' +
+      '<span class="pill ' + (d.status === 'online' ? 'ok' : 'no') + '">' +
+      (d.status === 'online' ? 'online' : 'offline') + ' · ' + ultimo + '</span>';
+    lista.appendChild(riga);
+  }
+}
+$('btn-rete').onclick = aggiornaRete;
 
 $('btn-installa').onclick = async () => {
   $('log').classList.remove('nascosto'); $('log').textContent = 'installo…\n';
@@ -129,6 +182,17 @@ $('btn-login').onclick = async () => {
   $('claude-log').textContent = 'accedi nella finestra aperta, poi Ricontrolla';
 };
 $('btn-riverifica').onclick = aggiornaClaude;
+
+async function aggiornaFivem(){
+  try {
+    const s = await window.sowai.fivemStato();
+    const el = $('fivem-stato');
+    if (s.inEsecuzione) pill(el, true, 'in esecuzione' + (s.cartella ? ' · ' + s.cartella : ''));
+    else if (s.trovato) pill(el, false, 'trovato, fermo' + (s.cartella ? ' · ' + s.cartella : ''));
+    else pill(el, false, 'nessuno trovato');
+  } catch { /* IPC non disponibile: si lascia lo stato di default */ }
+}
+aggiornaFivem();
 
 $('btn-accoppia').onclick = async () => {
   const base = $('base').value.trim(), codice = $('codice').value.trim();
@@ -144,6 +208,7 @@ $('btn-ferma').onclick = () => window.sowai.ferma();
 $('btn-scollega').onclick = async () => { await window.sowai.scollega(); aggiornaStato(); };
 
 window.sowai.suStato(() => aggiornaStato());
+window.sowai.suClaudeLancio((s) => mostraAvvisoClaude(s));
 window.sowai.suClaudeLog((r) => { const l=$('log'); l.classList.remove('nascosto'); l.textContent += r+'\n'; l.scrollTop=l.scrollHeight; });
 
 aggiornaClaude();

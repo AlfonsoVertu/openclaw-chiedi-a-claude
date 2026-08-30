@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('sowai', {
   claudeStato: () => ipcRenderer.invoke('claude-stato'),
   claudeInstalla: () => ipcRenderer.invoke('claude-installa'),
   claudeLogin: () => ipcRenderer.invoke('claude-login'),
+  fivemStato: () => ipcRenderer.invoke('fivem-stato'),
+  agentiRete: () => ipcRenderer.invoke('agenti-rete'),
   suStato: (cb) => ipcRenderer.on('stato', (_e, s) => cb(s)),
   suClaudeLog: (cb) => ipcRenderer.on('claude-log', (_e, r) => cb(r)),
+  suClaudeLancio: (cb) => ipcRenderer.on('claude-stato-lancio', (_e, s) => cb(s)),
 });

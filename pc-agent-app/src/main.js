@@ -10,6 +10,7 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, shell, nativeImage } = require(
 const path = require('path');
 const { Agent, capacita } = require('./agent');
 const { verificaClaude, installaClaude, loginClaude } = require('./claude-setup');
+const fivem = require('./fivem');
 
 const STATO_FILE = path.join(app.getPath('userData'), 'stato.json');
 
@@ -17,6 +18,10 @@ let finestra = null;
 let tray = null;
 let agent = null;
 let ultimoStato = { tipo: 'avvio' };
+// tenuto separato da ultimoStato (che l'avvio dell'agent sovrascrive subito
+// dopo) cosi' tray e finestra sanno sempre se la sessione Claude e' valida,
+// non solo al momento della verifica al lancio.
+let ultimoClaudeStato = { verificato: false, installato: false, loggato: false };
 
 // una sola istanza: se l'app e' gia' aperta, la seconda apertura mostra quella.
 if (!app.requestSingleInstanceLock()) {
@@ -69,8 +74,10 @@ function aggiornaTray() {
   if (!tray) return;
   tray.setImage(iconaApp());
   const connesso = ultimoStato.tipo === 'avviato';
+  const claudeAvviso = ultimoClaudeStato.installato && !ultimoClaudeStato.loggato;
   const menu = Menu.buildFromTemplate([
     { label: connesso ? `Connesso · device ${ultimoStato.device_id}` : 'Non connesso', enabled: false },
+    ...(claudeAvviso ? [{ label: '⚠ Claude non loggato: apri e "Accedi"', enabled: false }] : []),
     { type: 'separator' },
     { label: 'Apri', click: () => mostraFinestra() },
     connesso
@@ -80,7 +87,8 @@ function aggiornaTray() {
     { label: 'Esci', click: () => { app.inChiusura = true; app.quit(); } },
   ]);
   tray.setContextMenu(menu);
-  tray.setToolTip(connesso ? 'SOWAI Agent · connesso' : 'SOWAI Agent · fermo');
+  tray.setToolTip((connesso ? 'SOWAI Agent · connesso' : 'SOWAI Agent · fermo') +
+                  (claudeAvviso ? ' · Claude non loggato' : ''));
 }
 
 function inoltraStato(s) {
@@ -95,6 +103,7 @@ ipcMain.handle('stato-attuale', async () => ({
   ...ultimoStato,
   accoppiato: agent ? agent.accoppiato : false,
   capacita: await capacita(false),
+  claudeLancio: ultimoClaudeStato,
 }));
 
 ipcMain.handle('accoppia', async (_e, { base, codice }) => {
@@ -114,15 +123,46 @@ ipcMain.handle('claude-installa', async () => installaClaude((riga) => {
 }));
 ipcMain.handle('claude-login', async () => loginClaude());
 
+ipcMain.handle('agenti-rete', async () => agent ? agent.agentiInRete() : { ok: false, error: 'agent non pronto' });
+
+ipcMain.handle('fivem-stato', async () => {
+  try {
+    const ric = await fivem.ricognizione();
+    const prima = ric.installazioni[0] || null;
+    return {
+      trovato: ric.installazioni.length > 0 || ric.processi.length > 0,
+      inEsecuzione: ric.processi.length > 0,
+      cartella: (ric.processi[0] && ric.processi[0].cartella) || (prima && prima.cartella) || null,
+    };
+  } catch (e) {
+    return { trovato: false, errore: String(e && e.message || e) };
+  }
+});
+
 // ------------------------------------------------------------- avvio
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   agent = new Agent(STATO_FILE, {
     puoEseguire: process.env.SOWAI_AGENT_SHELL ? true : false,
     onStato: inoltraStato,
   });
   creaTray();
   creaFinestra();
+
+  // Claude Code gestisce da solo il refresh del proprio token OAuth quando
+  // viene invocato - ma solo se lo si invoca. Qui lo si dichiara subito al
+  // lancio, cosi' l'utente scopre una sessione scaduta dal tray/finestra,
+  // non a meta' di un task che fallisce senza preavviso.
+  try {
+    const cs = await verificaClaude();
+    ultimoClaudeStato = { verificato: true, installato: cs.installato, loggato: cs.loggato };
+  } catch (e) {
+    ultimoClaudeStato = { verificato: true, installato: false, loggato: false,
+                          errore: String(e && e.message || e) };
+  }
+  aggiornaTray();
+  if (finestra && !finestra.isDestroyed()) finestra.webContents.send('claude-stato-lancio', ultimoClaudeStato);
+
   // se gia' accoppiato, parte da solo senza mostrare la finestra
   if (agent.accoppiato) { finestra.hide(); agent.avvia(); }
 
