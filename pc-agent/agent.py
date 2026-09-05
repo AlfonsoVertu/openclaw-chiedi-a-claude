@@ -84,7 +84,10 @@ def _post(base, rotta, corpo, attesa=30):
     req = urllib.request.Request(
         base.rstrip("/") + "/odoo-gpt/pos-agent" + rotta,
         data=dati, method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"})
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 # UA proprio: il default di urllib (python-urllib) viene bannato
+                 # dalle WAF (Cloudflare error 1010). L'agent si dichiara.
+                 "User-Agent": "Mozilla/5.0 (compatible; SOWAI-Agent/1.0; +https://workingwithweb.eu)"})
     try:
         with urllib.request.urlopen(req, timeout=attesa) as r:
             return json.loads(r.read().decode("utf-8") or "{}")
@@ -170,7 +173,17 @@ def capacita():
         "claude": claude_loggato(),
     }
     if PUO_ESEGUIRE:
-        c["esegui"] = True
+        # Il PC diventa un desktop commander: dichiara tutte le azioni del
+        # modulo comandi (terminale, job async, file, processi). Il tenant le
+        # offre all'AI, ma quelle che AGISCONO passano prima dal freno
+        # observe/actuate: dichiararle non vuol dire poterle usare su un device
+        # in sola osservazione.
+        try:
+            import comandi
+            for nome in comandi.AZIONI:
+                c[nome] = True
+        except Exception:
+            c["esegui"] = True
     return c
 
 
@@ -198,16 +211,19 @@ def esegui_comando(azione, args):
             return {"risposta": r.stdout.strip()}
         raise RuntimeError((r.stderr or "Claude uscito con codice %s" % r.returncode)[:500])
 
-    if azione == "esegui":
-        if not PUO_ESEGUIRE:
-            raise PermissionError("l'esecuzione di comandi e' disattivata su questo agent")
-        comando = args.get("comando") or args.get("params", {}).get("comando")
-        if not comando:
-            raise ValueError("serve 'comando'")
-        r = subprocess.run(comando, capture_output=True, text=True, timeout=300,
-                           shell=True, encoding="utf-8", errors="replace")
-        return {"stdout": (r.stdout or "")[:8000], "stderr": (r.stderr or "")[:2000],
-                "codice": r.returncode}
+    # Le azioni desktop-commander (terminale, job, file, processi) stanno nel
+    # modulo comandi. Passano solo se l'esecuzione e' accesa su questo agent.
+    try:
+        import comandi
+        if azione in comandi.AZIONI:
+            if not PUO_ESEGUIRE:
+                raise PermissionError(
+                    "questo agent non e' abilitato all'esecuzione di comandi "
+                    "(SOWAI_AGENT_SHELL non impostato)")
+            payload = args.get("params") if isinstance(args.get("params"), dict) else args
+            return comandi.AZIONI[azione](payload)
+    except ImportError:
+        pass
 
     raise ValueError("azione sconosciuta: %s" % azione)
 
