@@ -202,14 +202,36 @@ def esegui_comando(azione, args):
         exe = claude_eseguibile()
         if not exe:
             raise RuntimeError("Claude Code non e' installato su questo PC")
-        cmd = [exe, "-p", compito]
+        # --output-format json: oltre al testo torna il CONTO DEI TOKEN e il
+        # costo. Chi ha mandato il compito vuole sapere quanto e' costato, e
+        # un numero inventato non serve a nessuno.
+        cmd = [exe, "-p", compito, "--output-format", "json"]
         if args.get("puo_agire"):
             cmd.append("--dangerously-skip-permissions")
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
                            encoding="utf-8", errors="replace", cwd=os.path.expanduser("~"))
-        if r.returncode == 0 and (r.stdout or "").strip():
-            return {"risposta": r.stdout.strip()}
-        raise RuntimeError((r.stderr or "Claude uscito con codice %s" % r.returncode)[:500])
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            raise RuntimeError((r.stderr or "Claude uscito con codice %s" % r.returncode)[:500])
+        grezzo = r.stdout.strip()
+        try:
+            dati = json.loads(grezzo)
+        except ValueError:
+            # Una versione che non conosce --output-format json: resta il testo.
+            return {"risposta": grezzo}
+        if not isinstance(dati, dict):
+            return {"risposta": grezzo}
+        uso = dati.get("usage") or {}
+        fuori = {"risposta": (dati.get("result") or dati.get("response") or grezzo)}
+        dentro = uso.get("input_tokens", 0) + uso.get("cache_read_input_tokens", 0) \
+            + uso.get("cache_creation_input_tokens", 0)
+        if dentro or uso.get("output_tokens"):
+            fuori["token_entrata"] = dentro
+            fuori["token_uscita"] = uso.get("output_tokens", 0)
+        if dati.get("total_cost_usd") is not None:
+            fuori["costo_usd"] = dati["total_cost_usd"]
+        if dati.get("duration_ms") is not None:
+            fuori["durata_ms"] = dati["duration_ms"]
+        return fuori
 
     # Le azioni desktop-commander (terminale, job, file, processi) stanno nel
     # modulo comandi. Passano solo se l'esecuzione e' accesa su questo agent.
