@@ -144,13 +144,21 @@ Attenzione: `minimal` da solo contiene **un** solo strumento e non include
 
 ---
 
-## In questo repo c'è anche: SOWAI Browser Agent
+## L'agent PC e l'estensione stanno altrove
 
-`browser-extension/` — l'estensione Chrome che fa del browser un device del
-tenant. Stessa architettura del server MCP qui sopra, altra periferica: si
-accoppia a sowai/fitness con link + codice a 6 cifre (o auto-accoppiamento via
-sessione Odoo), dichiara le sue capacita', e l'AI collegata al tenant la
-guida. Vedi `browser-extension/README.md`.
+Questo repo conteneva anche una copia dell'agent per PC (`pc-agent/`, con la
+sua app desktop) e dell'estensione Chrome (`browser-extension/`). Erano copie
+vecchie: l'agent aveva la meta' delle azioni, e l'estensione era ferma alla
+1.1.0 mentre quella buona e' la 3.0.0. Due copie della stessa cosa che si
+allontanano in silenzio sono peggio di una sola, quindi qui non ci sono piu'.
+
+Dove stanno adesso:
+
+- **Agent PC** (Windows e Linux): repo `soway-agent-pc`. Si aggiorna da solo
+  dal server a cui e' accoppiato (`agent-aggiorna`), quindi non serve piu'
+  copiarlo a mano da nessuna parte.
+- **Estensione Chrome**: repo `soway-agent-browser`, servita ai tenant da
+  SoWay su `/soway/agent/scarica/media-uploader`.
 
 Le tre gambe dello stesso tavolo - browser, telefono, PC - parlano tutte le
 stesse quattro rotte verso il tenant: pair, heartbeat, poll, result.
